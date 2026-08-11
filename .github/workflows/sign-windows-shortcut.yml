@@ -1,0 +1,49 @@
+name: Sign Windows Shortcut
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    name: Sign placeholder Shortcut with Apple's CLI
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Export secret-free placeholder Shortcut
+        run: python3 scripts/export-windows-shortcut.py
+
+      - name: Inspect Apple Shortcuts CLI
+        run: |
+          /usr/bin/shortcuts --help
+          /usr/bin/shortcuts sign --help
+
+      - name: Sign for anyone
+        run: |
+          /usr/bin/shortcuts sign \
+            --mode anyone \
+            --input build/ios-assistant-windows-unsigned.shortcut \
+            --output build/ios-assistant-windows-signed.shortcut
+
+      - name: Validate signed artifact
+        run: |
+          test -s build/ios-assistant-windows-signed.shortcut
+          shasum -a 256 build/ios-assistant-windows-signed.shortcut \
+            > build/ios-assistant-windows-signed.shortcut.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-assistant-windows-signed
+          path: |
+            build/ios-assistant-windows-signed.shortcut
+            build/ios-assistant-windows-signed.shortcut.sha256
+          if-no-files-found: error
+          retention-days: 1
