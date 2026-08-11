@@ -42,7 +42,7 @@ jobs:
           clang_path="$(xcrun --sdk iphoneos --find clang)"
 
           echo "$NEO_FRAMEWORK_SHA256  $framework_binary" | shasum -a 256 -c -
-          lipo -verify_arch arm64 "$framework_binary"
+          lipo "$framework_binary" -verify_arch arm64
           nm -gU "$framework_binary" | grep -q \
             '_sign_aea_with_private_key_and_auth_data$'
           otool -L "$framework_binary"
