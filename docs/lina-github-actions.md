@@ -23,7 +23,9 @@ Sideloadly 使用使用者自己的免費 Apple ID 簽章並安裝。
 
 ## 安全與限制
 
-- 原始碼固定在 `0dba26ca52cbfd2acf84e748b870c4e66752d8d0`，避免上游分支變動時靜默換碼。
+- Lina 原始碼固定在 `0dba26ca52cbfd2acf84e748b870c4e66752d8d0`；缺少的 iOS
+  靜態函式庫則從作者的 libNeoAppleArchive
+  `bb31e0303069de9fa8b733b2a3c763aec19368da` 重建，避免上游分支變動時靜默換碼。
 - IPA 是未簽章產物；Sideloadly 必須同時簽署主 App 與 Intents extension。
 - 工作流程不保存 Apple ID、密碼、兩步驟驗證碼、裝置 UDID 或簽章憑證。
 - 如果 Sideloadly 顯示不支援 iCloud entitlement，可啟用其移除不支援 entitlement
