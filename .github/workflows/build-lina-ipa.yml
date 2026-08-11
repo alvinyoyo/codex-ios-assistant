@@ -1,0 +1,90 @@
+name: Build Lina IPA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/build-lina-ipa.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build unsigned Lina IPA
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    env:
+      # Pin the audited upstream source instead of building a moving branch.
+      LINA_COMMIT: 0dba26ca52cbfd2acf84e748b870c4e66752d8d0
+
+    steps:
+      - name: Fetch pinned Lina source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/0xilis/Lina.git "$RUNNER_TEMP/Lina"
+          cd "$RUNNER_TEMP/Lina"
+          git checkout --detach "$LINA_COMMIT"
+          test "$(git rev-parse HEAD)" = "$LINA_COMMIT"
+
+      - name: Build for a physical iPhone without code signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/Lina"
+
+          xcodebuild \
+            -project Lina.xcodeproj \
+            -target Lina \
+            -configuration Release \
+            -sdk iphoneos \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/LinaSourcePackages" \
+            SYMROOT="$RUNNER_TEMP/LinaBuild" \
+            OBJROOT="$RUNNER_TEMP/LinaObj" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            DEVELOPMENT_TEAM= \
+            build
+
+      - name: Package and validate unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_path="$RUNNER_TEMP/LinaBuild/Release-iphoneos/Lina.app"
+          output_dir="$RUNNER_TEMP/LinaArtifact"
+          payload_dir="$output_dir/Payload"
+
+          test -d "$app_path"
+          test -x "$app_path/Lina"
+          test -d "$app_path/PlugIns/LinaIntents.appex"
+
+          mkdir -p "$payload_dir"
+          cp -R "$app_path" "$payload_dir/Lina.app"
+
+          # The next signer must sign both the app and its Intents extension.
+          find "$payload_dir" -type d -name _CodeSignature -prune -exec rm -rf {} +
+          find "$payload_dir" -type f -name embedded.mobileprovision -delete
+
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+            "$payload_dir/Lina.app/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+            "$payload_dir/Lina.app/PlugIns/LinaIntents.appex/Info.plist"
+
+          cd "$output_dir"
+          ditto -c -k --sequesterRsrc --keepParent Payload Lina-unsigned.ipa
+          shasum -a 256 Lina-unsigned.ipa > Lina-unsigned.ipa.sha256
+          unzip -t Lina-unsigned.ipa
+
+      - name: Upload Lina IPA
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Lina-unsigned-IPA
+          path: |
+            ${{ runner.temp }}/LinaArtifact/Lina-unsigned.ipa
+            ${{ runner.temp }}/LinaArtifact/Lina-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 7
