@@ -18,7 +18,7 @@ jobs:
     env:
       # Pin the audited upstream source instead of building a moving branch.
       LINA_COMMIT: 0dba26ca52cbfd2acf84e748b870c4e66752d8d0
-      LIBNEO_COMMIT: bb31e0303069de9fa8b733b2a3c763aec19368da
+      NEO_FRAMEWORK_SHA256: 577240d6ca7f4286803a10537ed4eec56de2fd8e3546435a1d0213da71689b90
 
     steps:
       - name: Fetch pinned Lina source
@@ -30,87 +30,42 @@ jobs:
           git checkout --detach "$LINA_COMMIT"
           test "$(git rev-parse HEAD)" = "$LINA_COMMIT"
 
-          git clone --filter=blob:none https://github.com/0xilis/libNeoAppleArchive.git \
-            "$RUNNER_TEMP/libNeoAppleArchive"
-          cd "$RUNNER_TEMP/libNeoAppleArchive"
-          git checkout --detach "$LIBNEO_COMMIT"
-          test "$(git rev-parse HEAD)" = "$LIBNEO_COMMIT"
-          git submodule update --init --recursive
-
-      - name: Rebuild upstream iOS static libraries
+      - name: Prepare official NeoAppleArchive framework
         shell: bash
         run: |
           set -euo pipefail
 
-          source_root="$RUNNER_TEMP/libNeoAppleArchive"
+          framework_dir="$RUNNER_TEMP/Lina/Lina/Libraries/NeoAppleArchive.framework"
+          framework_binary="$framework_dir/NeoAppleArchive"
           static_dir="$RUNNER_TEMP/Lina/Lina/Libraries/Static"
           sdk_path="$(xcrun --sdk iphoneos --show-sdk-path)"
           clang_path="$(xcrun --sdk iphoneos --find clang)"
 
+          echo "$NEO_FRAMEWORK_SHA256  $framework_binary" | shasum -a 256 -c -
+          lipo -verify_arch arm64 "$framework_binary"
+          nm -gU "$framework_binary" | grep -q \
+            '_sign_aea_with_private_key_and_auth_data$'
+          otool -L "$framework_binary"
+
+          # The upstream project references private static archives that were
+          # never committed. Its checked-in framework contains those objects
+          # and Lina's private signing function, so harmless placeholder
+          # archives satisfy the stale project references while the framework
+          # supplies the real symbols.
           mkdir -p "$static_dir"
-          cp "$source_root/ios-support/libcrypto.a" "$static_dir/libcrypto.a"
-          cp "$source_root/ios-support/libssl.a" "$static_dir/libssl.a"
-
-          common_flags=(
-            -arch arm64
-            -isysroot "$sdk_path"
-            -miphoneos-version-min=13.0
-            -Os
-            -fvisibility=hidden
-          )
-
-          build_archive() {
-            local output="$1"
-            local include_root="$2"
-            shift 2
-            local object_dir="$RUNNER_TEMP/objects-$(basename "$output" .a)"
-            rm -rf "$object_dir"
-            mkdir -p "$object_dir"
-
-            local source
-            local index=0
-            for source in "$@"; do
-              "$clang_path" "${common_flags[@]}" -I"$include_root" \
-                -c "$source" -o "$object_dir/$index.o"
-              index=$((index + 1))
-            done
-            test "$index" -gt 0
-            xcrun libtool -static -o "$output" "$object_dir"/*.o
-          }
-
-          lzfse_root="$source_root/libNeoAppleArchive/compression/lzfse/src"
-          lzfse_sources=("$lzfse_root"/*.c)
-          build_archive "$static_dir/liblzfse.a" "$lzfse_root" \
-            "${lzfse_sources[@]}"
-
-          zbitmap_root="$source_root/libNeoAppleArchive/compression/libzbitmap"
-          build_archive "$static_dir/libzbitmap.a" "$zbitmap_root" \
-            "$zbitmap_root/libzbitmap.c"
-
-          neo_root="$source_root/libNeoAppleArchive"
-          neo_sources=("$neo_root"/*.c)
-          neo_object_dir="$RUNNER_TEMP/objects-libNeoAppleArchive"
-          rm -rf "$neo_object_dir"
-          mkdir -p "$neo_object_dir"
-          index=0
-          for source in "${neo_sources[@]}"; do
-            "$clang_path" "${common_flags[@]}" \
-              -I"$neo_root" \
-              -I"$lzfse_root" \
-              -I"$zbitmap_root" \
-              -I"$source_root/ios-support" \
-              -DOPENSSL_API_COMPAT=30400 \
-              -Wno-deprecated-declarations \
-              -c "$source" -o "$neo_object_dir/$index.o"
-            index=$((index + 1))
-          done
-          test "$index" -gt 0
-          xcrun libtool -static -o "$static_dir/libNeoAppleArchive.a" \
-            "$neo_object_dir"/*.o
-
-          for archive in "$static_dir"/*.a; do
-            test -s "$archive"
-            lipo -info "$archive"
+          printf '%s\n' 'void lina_link_placeholder(void) {}' \
+            > "$RUNNER_TEMP/lina-link-placeholder.c"
+          "$clang_path" \
+            -arch arm64 \
+            -isysroot "$sdk_path" \
+            -miphoneos-version-min=13.0 \
+            -c "$RUNNER_TEMP/lina-link-placeholder.c" \
+            -o "$RUNNER_TEMP/lina-link-placeholder.o"
+          xcrun libtool -static \
+            -o "$RUNNER_TEMP/lina-link-placeholder.a" \
+            "$RUNNER_TEMP/lina-link-placeholder.o"
+          for name in libcrypto liblzfse libzbitmap libNeoAppleArchive libssl; do
+            cp "$RUNNER_TEMP/lina-link-placeholder.a" "$static_dir/$name.a"
           done
 
       - name: Build for a physical iPhone without code signing
@@ -132,6 +87,8 @@ jobs:
             CODE_SIGN_IDENTITY= \
             DEVELOPMENT_TEAM= \
             IPHONEOS_DEPLOYMENT_TARGET=13.0 \
+            FRAMEWORK_SEARCH_PATHS="$RUNNER_TEMP/Lina/Lina/Libraries" \
+            'OTHER_LDFLAGS=$(inherited) -framework NeoAppleArchive -lz' \
             build
 
       - name: Package and validate unsigned IPA
@@ -147,6 +104,11 @@ jobs:
           test -x "$app_path/Lina"
           test -d "$app_path/PlugIns/LinaIntents.appex"
 
+          mkdir -p "$app_path/Frameworks"
+          cp -R \
+            "$RUNNER_TEMP/Lina/Lina/Libraries/NeoAppleArchive.framework" \
+            "$app_path/Frameworks/NeoAppleArchive.framework"
+
           mkdir -p "$payload_dir"
           cp -R "$app_path" "$payload_dir/Lina.app"
 
@@ -158,6 +120,8 @@ jobs:
             "$payload_dir/Lina.app/Info.plist"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
             "$payload_dir/Lina.app/PlugIns/LinaIntents.appex/Info.plist"
+          test -x \
+            "$payload_dir/Lina.app/Frameworks/NeoAppleArchive.framework/NeoAppleArchive"
 
           cd "$output_dir"
           ditto -c -k --sequesterRsrc --keepParent Payload Lina-unsigned.ipa
