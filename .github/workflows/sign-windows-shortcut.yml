@@ -2,6 +2,11 @@ name: Sign Windows Shortcut
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/sign-windows-shortcut.yml
+      - scripts/export-windows-shortcut.py
+      - shortcut/actions.template.plist
 
 permissions:
   contents: read
